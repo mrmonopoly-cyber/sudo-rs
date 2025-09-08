@@ -81,8 +81,17 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         registry: &mut EventRegistry<T>,
     ) -> io::Result<()> {
         match poll_event {
-            PollEvent::Readable => self.buffer_lr.read(&mut self.left, registry),
-            PollEvent::Writable => self.buffer_rl.write(&mut self.left, registry),
+            PollEvent::Readable => {
+                // Stop polling until the data has been consumed
+                self.buffer_lr.read_handle.ignore(registry);
+                self.buffer_lr.read(&mut self.left, registry)
+            }
+            PollEvent::Writable => {
+                if self.buffer_rl.write(&mut self.left, registry)? {
+                    self.buffer_rl.read_handle.resume(registry);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -93,8 +102,15 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         registry: &mut EventRegistry<T>,
     ) -> io::Result<()> {
         match poll_event {
-            PollEvent::Readable => self.buffer_rl.read(&mut self.right, registry),
-            PollEvent::Writable => self.buffer_lr.write(&mut self.right, registry),
+            PollEvent::Readable => {
+                // Activity on the other side, resume reading
+                self.buffer_lr.read_handle.resume(registry);
+                self.buffer_rl.read(&mut self.right, registry)
+            }
+            PollEvent::Writable => {
+                let _ = self.buffer_lr.write(&mut self.right, registry)?;
+                Ok(())
+            }
         }
     }
 
@@ -164,22 +180,18 @@ impl<R: Read, W: Write> Buffer<R, W> {
         &mut self,
         write: &mut W,
         registry: &mut EventRegistry<T>,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         // If the buffer is empty, there is nothing to be written.
         if self.internal.is_empty() {
             self.write_handle.ignore(registry);
-            return Ok(());
+            return Ok(false);
         }
 
         // Remove bytes from the buffer and write them.
         let removed_len = self.internal.remove(write)?;
 
-        // If we removed something, the buffer is not full anymore and we can resume reading.
-        if removed_len > 0 {
-            self.read_handle.resume(registry);
-        }
-
-        Ok(())
+        // Return whether we actually wrote something
+        Ok(removed_len > 0)
     }
 
     /// Flush this buffer, ensuring that all the contents of its internal buffer are written.
