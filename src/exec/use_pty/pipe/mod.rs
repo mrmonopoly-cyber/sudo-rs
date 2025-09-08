@@ -16,6 +16,7 @@ pub(super) struct Pipe<L, R> {
     right: R,
     buffer_lr: Buffer<L, R>,
     buffer_rl: Buffer<R, L>,
+    responding: bool,
 }
 
 impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
@@ -40,6 +41,7 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
             ),
             left,
             right,
+            responding: false,
         }
     }
 
@@ -83,7 +85,10 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         match poll_event {
             PollEvent::Readable => {
                 // Stop polling until the data has been consumed
-                self.buffer_lr.read_handle.ignore(registry);
+                if !self.responding {
+                    self.buffer_lr.read_handle.ignore(registry);
+                }
+
                 self.buffer_lr.read(&mut self.left, registry)
             }
             PollEvent::Writable => {
@@ -103,12 +108,19 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
     ) -> io::Result<()> {
         match poll_event {
             PollEvent::Readable => {
-                // Activity on the other side, resume reading
-                self.buffer_lr.read_handle.resume(registry);
+                if !self.responding {
+                    // A response is seen: the TTY is ours
+                    self.responding = true;
+                    self.buffer_lr.read_handle.resume(registry);
+                }
+
                 self.buffer_rl.read(&mut self.right, registry)
             }
             PollEvent::Writable => {
-                let _ = self.buffer_lr.write(&mut self.right, registry)?;
+                if self.buffer_lr.write(&mut self.right, registry)? && self.responding {
+                    self.buffer_lr.read_handle.resume(registry);
+                }
+
                 Ok(())
             }
         }
