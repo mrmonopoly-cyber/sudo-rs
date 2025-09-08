@@ -17,6 +17,7 @@ pub(super) struct Pipe<L, R> {
     buffer_lr: Buffer<L, R>,
     buffer_rl: Buffer<R, L>,
     responding: bool,
+    background: bool,
 }
 
 impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
@@ -41,7 +42,8 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
             ),
             left,
             right,
-            responding: false,
+            responding: true,
+            background: false,
         }
     }
 
@@ -66,6 +68,13 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         self.buffer_lr.write_handle.ignore(registry);
         self.buffer_rl.read_handle.ignore(registry);
         self.buffer_rl.write_handle.ignore(registry);
+    }
+
+    /// Stop the poll events of the left end of this pipe.
+    pub(super) fn disable_input<T: Process>(&mut self, registry: &mut EventRegistry<T>) {
+        self.buffer_lr.read_handle.ignore(registry);
+        self.background = true;
+        self.responding = false;
     }
 
     /// Resume the poll events of this pipe
