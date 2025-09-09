@@ -16,7 +16,6 @@ pub(super) struct Pipe<L, R> {
     right: R,
     buffer_lr: Buffer<L, R>,
     buffer_rl: Buffer<R, L>,
-    responding: bool,
     background: bool,
 }
 
@@ -42,7 +41,6 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
             ),
             left,
             right,
-            responding: true,
             background: false,
         }
     }
@@ -74,12 +72,13 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
     pub(super) fn disable_input<T: Process>(&mut self, registry: &mut EventRegistry<T>) {
         self.buffer_lr.read_handle.ignore(registry);
         self.background = true;
-        self.responding = false;
     }
 
     /// Resume the poll events of this pipe
     pub(super) fn resume_events<T: Process>(&mut self, registry: &mut EventRegistry<T>) {
-        self.buffer_lr.read_handle.resume(registry);
+        if !self.background {
+            self.buffer_lr.read_handle.resume(registry);
+        }
         self.buffer_lr.write_handle.resume(registry);
         self.buffer_rl.read_handle.resume(registry);
         self.buffer_rl.write_handle.resume(registry);
@@ -92,14 +91,7 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         registry: &mut EventRegistry<T>,
     ) -> io::Result<()> {
         match poll_event {
-            PollEvent::Readable => {
-                // Stop polling until the data has been consumed
-                if !self.responding {
-                    self.buffer_lr.read_handle.ignore(registry);
-                }
-
-                self.buffer_lr.read(&mut self.left, registry)
-            }
+            PollEvent::Readable => self.buffer_lr.read(&mut self.left, registry),
             PollEvent::Writable => {
                 if self.buffer_rl.write(&mut self.left, registry)? {
                     self.buffer_rl.read_handle.resume(registry);
@@ -116,17 +108,9 @@ impl<L: Read + Write + AsFd, R: Read + Write + AsFd> Pipe<L, R> {
         registry: &mut EventRegistry<T>,
     ) -> io::Result<()> {
         match poll_event {
-            PollEvent::Readable => {
-                if !self.responding {
-                    // A response is seen: the TTY is ours
-                    self.responding = true;
-                    self.buffer_lr.read_handle.resume(registry);
-                }
-
-                self.buffer_rl.read(&mut self.right, registry)
-            }
+            PollEvent::Readable => self.buffer_rl.read(&mut self.right, registry),
             PollEvent::Writable => {
-                if self.buffer_lr.write(&mut self.right, registry)? && self.responding {
+                if self.buffer_lr.write(&mut self.right, registry)? && !self.background {
                     self.buffer_lr.read_handle.resume(registry);
                 }
 
@@ -211,7 +195,7 @@ impl<R: Read, W: Write> Buffer<R, W> {
         // Remove bytes from the buffer and write them.
         let removed_len = self.internal.remove(write)?;
 
-        // Return whether we actually wrote something
+        // Return whether we actually freed up some buffer space
         Ok(removed_len > 0)
     }
 

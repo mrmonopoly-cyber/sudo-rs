@@ -159,6 +159,10 @@ pub(in crate::exec) fn exec_pty(
         }
     };
 
+    if !foreground {
+        tty_pipe.disable_input(&mut registry);
+    }
+
     // SAFETY: There should be no other threads at this point.
     let ForkResult::Parent(monitor_pid) = (unsafe { fork() }).map_err(|err| {
         dev_error!("cannot fork monitor process: {err}");
@@ -310,7 +314,7 @@ impl ParentClosure {
         sudo_pid: ProcessId,
         parent_pgrp: ProcessId,
         mut backchannel: ParentBackchannel,
-        mut tty_pipe: Pipe<UserTerm, PtyLeader>,
+        tty_pipe: Pipe<UserTerm, PtyLeader>,
         tty_size: TermSize,
         foreground: bool,
         term_raw: bool,
@@ -325,11 +329,6 @@ impl ParentClosure {
         // Ignore write events on the backchannel as we don't want to poll it for writing if there
         // are no messages in the queue.
         backchannel_write_handle.ignore(registry);
-
-        // Ignore events on the Tty if we are not the foreground process
-        if !foreground {
-            tty_pipe.disable_input(registry);
-        }
 
         let signal_stream = SignalStream::init()?;
 
