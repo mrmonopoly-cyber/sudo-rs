@@ -93,6 +93,16 @@ pub(super) fn exec_monitor(
 
         setpgid(ProcessId::new(0), command_pid).ok();
 
+        match SignalHandler::register(SIGTTIN, SignalHandlerBehavior::Stream) {
+            Ok(handler) => handler.forget(),
+            Err(err) => dev_warn!("cannot set handler for SIGTTIN: {err}"),
+        }
+        match SignalHandler::register(SIGTTOU, SignalHandlerBehavior::Stream) {
+            Ok(handler) => handler.forget(),
+            Err(err) => dev_warn!("cannot set handler for SIGTTOU: {err}"),
+        }
+
+
         // Wait for the monitor to set us as the foreground group for the pty if we are in the
         // foreground.
         if foreground {
