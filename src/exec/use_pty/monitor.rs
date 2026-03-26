@@ -19,7 +19,7 @@ use crate::{
     system::{
         _exit, ForkResult, fork, getpgid, getpgrp,
         interface::ProcessId,
-        kill, setpgid, setsid,
+        kill, killpg, setpgid, setsid,
         term::{PtyFollower, Terminal},
         wait::{Wait, WaitError, WaitOptions},
     },
@@ -333,7 +333,7 @@ impl<'a> MonitorClosure<'a> {
                         self.command_pgrp
                     );
                 }
-                kill(command_pid, SIGCONT).ok();
+                killpg(command_pid, SIGCONT).ok();
             }
             SIGCONT_BG => {
                 // Continue with the monitor as the foreground process group
